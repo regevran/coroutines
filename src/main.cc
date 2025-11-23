@@ -2,14 +2,16 @@
 #include <coroutine>
 #include <print>
 #include <list>
+#include <optional>
 
 class executer {
     public:
-        void add_coro(std::coroutine_handle<task::promise_type> c) {
+        void add_coro(std::coroutine_handle<> c) {
             coros_.push_back(c);
         }
 
         void run() {
+            started_ = true;
             while (not coros_.empty()) {
                 auto current_coro = coros_.front();
                 coros_.pop_front();
@@ -17,109 +19,121 @@ class executer {
             }
         }
 
+    public:
+        bool await_ready() { return started_; }
+        void await_suspend(std::coroutine_handle<> h) {
+            add_coro(h);
+        }
+        bool await_resume() {return started_;}
+
+    public:
+        bool started() const {
+            return started_;
+        }
+
     private:
-        std::list<std::coroutine_handle<task::promise_type>> coros_;
+        std::list<std::coroutine_handle<>> coros_;
+        bool started_ = false;
+} main_executer;
+
+template<class T>
+class task {
+    public:
+    using value_type = std::optional<T>;
+
+    class promise_type {
+        public:
+
+            task get_return_object() {
+                return task(std::coroutine_handle<task::promise_type>::from_promise(*this));
+            }
+            std::suspend_never initial_suspend() { return {}; }
+            std::suspend_always final_suspend() noexcept { return {}; }
+            void unhandled_exception() {}
+            void return_value(T t) {
+                data_ = t;
+            }
+
+            value_type& get() { return data_; }
+
+        private:
+            value_type data_;
+    };
+
+    public:
+        task(std::coroutine_handle<task::promise_type> handle) 
+            : this_handle_(handle) {}
+
+        bool await_ready() {return get().has_value();}
+        void await_suspend(std::coroutine_handle<task::promise_type> h) {
+            main_executer.add_coro(h);
+        }
+        value_type await_resume() {
+            return get(); 
+        }
+
+    public:
+        value_type& get() {
+            return this_handle_.promise().get();
+        }
+    private:
+        std::coroutine_handle<promise_type> this_handle_;
 };
 
-class worker {
+template<>
+class task<void> {
     public:
-        worker(executer& e)
-            : executer_(e) {}
+    class promise_type {
+        public:
+            task get_return_object() {
+                return task(std::coroutine_handle<task::promise_type>::from_promise(*this));
+            }
+            std::suspend_never initial_suspend() { return {}; }
+            std::suspend_always final_suspend() noexcept { return {}; }
+            void unhandled_exception() {}
+            void return_void() {}
+            void get() {}
+    };
+
     public:
+        task(std::coroutine_handle<task::promise_type> handle) 
+            : this_handle_(handle) {}
+
         bool await_ready() {return false;}
         void await_suspend(std::coroutine_handle<task::promise_type> h) {
-            executer_.add_coro(h);
+            main_executer.add_coro(h);
         }
         void await_resume() {}
 
-    private:
-        executer& executer_;
-};
-
-struct std::coroutine_traits<task, executer*>
-    struct promise_type {
-        promise_type(executer* e ) 
-            : executer_(e) {}
-
-        task get_return_object() {
-            task ret(std::coroutine_handle<promise_type>::from_promise(*this));
-            ret.set_executer(exeuter_);
-        }
-        std::suspend_never initial_suspend() { return {}; }
-        std::suspend_always final_suspend() noexcept { return {}; }
-        void unhandled_exception() {}
-
-        executer* executer_;
-    }
-};
-
-template<typename... args>
-struct std::coroutine_traits<task, args...>
-    struct promise_type {
-        task get_return_object() {
-            return {} //task(std::coroutine_handle<promise_type>::from_promise(*this));
-        }
-        std::suspend_never initial_suspend() { return {}; }
-        std::suspend_always final_suspend() noexcept { return {}; }
-        void unhandled_exception() {}
-    }
-};
-
-class task {
     public:
-        /*
-        task(std::coroutine_handle<promise_type> handle) 
-            : this_handle_(handle) {}
-        */
-        task(executer* e)
-            : executer_(e) {}
-
-    public:
-        bool await_ready() {return the_work_.await_ready();}
-        void await_suspend(std::coroutine_handle<task::promise_type> h) {
-            the_work_.await_suspend(h);
-        }
-        void await_resume() { the_work_.await_resume(); }
+        void get() {}
 
     private:
-        executer* executer_ = nullptr;
-
-    /*
-    public:
-        void resume() {
-            if (not this_handle_.done()) {
-                this_handle_.resume();
-            }
-        }
-
-    private:
-        task(std::coroutine_handle<promise_type> handle) 
-            : this_handle_(handle) {}
-
-   private:
-       std::coroutine_handle<promise_type> this_handle_;
-   */
+        std::coroutine_handle<promise_type> this_handle_;
 };
 
-
-task bar() {
-    work w;
-    co_wait w.do_work();
+task<int> executer_started() {
+    co_return main_executer.started();
 }
 
-task foo(executer& e) {
-    std::println("co awaiting bar");
-    co_await bar();
-    std::println("work resumed");
+task<int> magic_number() {
+    co_await executer_started();
+    co_return 12;
+}
+
+task<int> foo() {
+    std::println("co awaiting magic_number()");
+    auto number = co_await magic_number();
+    std::println("work resumed: {}", number.value_or(-1));
+    co_return number.value_or(-1);
 }
 
 int main() {
     std::println("main started");
 
-    executer the_runner;
-    foo(the_runner);
+    foo();
     std::println("starting main loop");
-    the_runner.run();
+    main_executer.run();
 
     std::println("main ended");
 }

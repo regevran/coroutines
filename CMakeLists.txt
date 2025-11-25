@@ -5,6 +5,10 @@ set (
     PROJ_NAME
     ran_coro
 )
+set(
+    CMAKE_BUILD_TYPE
+    Debug
+)
 
 project(${PROJ_NAME})
 

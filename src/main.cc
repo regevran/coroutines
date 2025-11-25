@@ -3,6 +3,7 @@
 #include <print>
 #include <list>
 #include <optional>
+#include <source_location>
 
 class executer {
     public:
@@ -20,11 +21,16 @@ class executer {
         }
 
     public:
-        bool await_ready() { return started_; }
+        bool await_ready() { 
+            return started_; 
+        }
+
         void await_suspend(std::coroutine_handle<> h) {
             add_coro(h);
         }
-        bool await_resume() {return started_;}
+        bool await_resume() {
+            return started_;
+        }
 
     public:
         bool started() const {
@@ -43,25 +49,33 @@ class task {
 
     class promise_type {
         public:
-
             task get_return_object() {
                 return task(std::coroutine_handle<task::promise_type>::from_promise(*this));
             }
-            std::suspend_never initial_suspend() { return {}; }
-            std::suspend_always final_suspend() noexcept { return {}; }
+            std::suspend_never initial_suspend() { 
+                return {}; 
+            }
+
+            std::suspend_always final_suspend() noexcept { 
+                return {}; 
+            }
             void unhandled_exception() {}
             void return_value(T t) {
                 data_ = t;
+                std::println("t == {}", t);
             }
 
-            value_type& get() { return data_; }
+            value_type& get() { 
+                return data_; 
+            }
 
         private:
             value_type data_;
     };
 
     private:
-        task(std::coroutine_handle<task::promise_type> handle) : this_handle_(handle) {}
+        task(std::coroutine_handle<task::promise_type> handle) : this_handle_(handle) {
+        }
 
     public:
         void suspend() { main_executer.add_coro(this_handle_); }
@@ -143,7 +157,12 @@ task<bool> executer_started() {
 }
 
 task<int> magic_number() {
-    co_await executer_started();
+    std::optional<bool> main_loop_started = co_await executer_started();
+    while (not main_loop_started.has_value()) {
+        while (not main_loop_started) {
+            main_loop_started = co_await executer_started();
+        }
+    }
     co_return 12;
 }
 
@@ -157,7 +176,7 @@ task<int> foo() {
 int main() {
     std::println("main started");
 
-    foo();
+    auto foo_num = foo();
     std::println("starting main loop");
     main_executer.run();
 
